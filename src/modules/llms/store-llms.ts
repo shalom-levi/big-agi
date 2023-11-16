@@ -16,6 +16,7 @@ export interface DLLM<TSourceSetup = unknown, TLLMOptions = unknown> {
   description: string;
   tags: string[]; // UNUSED for now
   contextTokens: number;
+  maxOutputTokens: number;
   hidden: boolean;
 
   // llm -> source
@@ -63,7 +64,7 @@ interface ModelsData {
 }
 
 interface ModelsActions {
-  addLLMs: (llms: DLLM[]) => void;
+  setLLMs: (llms: DLLM[], sourceId: DModelSourceId, preserveExpired?: boolean) => void;
   removeLLM: (id: DLLMId) => void;
   updateLLM: (id: DLLMId, partial: Partial<DLLM>) => void;
   updateLLMOptions: <TLLMOptions>(id: DLLMId, partialOptions: Partial<TLLMOptions>) => void;
@@ -97,10 +98,15 @@ export const useModelsStore = create<ModelsData & ModelsActions>()(
         set(state => updateSelectedIds(state.llms, state.chatLLMId, state.fastLLMId, id)),
 
       // NOTE: make sure to the _source links (sId foreign) are already set before calling this
-      // this will replace existing llms with the same id
-      addLLMs: (llms: DLLM[]) =>
+      setLLMs: (llms: DLLM[], sourceId: DModelSourceId, preserveExpired?: boolean) =>
         set(state => {
-          const newLlms = [...llms, ...state.llms.filter(llm => !llms.find(m => m.id === llm.id))];
+
+          const otherLlms = preserveExpired === true
+            ? state.llms
+            : state.llms.filter(llm => llm.sId !== sourceId);
+
+          // replace existing llms with the same id
+          const newLlms = [...llms, ...otherLlms.filter(llm => !llms.find(m => m.id === llm.id))];
           return {
             llms: newLlms,
             ...updateSelectedIds(newLlms, state.chatLLMId, state.fastLLMId, state.funcLLMId),
@@ -164,6 +170,21 @@ export const useModelsStore = create<ModelsData & ModelsActions>()(
     }),
     {
       name: 'app-models',
+
+      /* versioning:
+       *  1: adds maxOutputTokens (default to half of contextTokens)
+       */
+      version: 1,
+      migrate: (state: any, fromVersion: number): ModelsData & ModelsActions => {
+
+        // 0 -> 1: add 'maxOutputTokens' where missing,
+        if (state && fromVersion === 0)
+          for (const llm of state.llms)
+            if (!llm.maxOutputTokens)
+              llm.maxOutputTokens = Math.round((llm.contextTokens || 4096) / 2);
+
+        return state;
+      },
 
       // Pre-saving: omit the memory references from the persisted state
       partialize: (state) => ({
